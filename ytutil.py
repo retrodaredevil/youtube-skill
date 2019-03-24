@@ -37,23 +37,15 @@ def _get_downloaded_path(search_str, path_str="."):
     return best_file
 
 
-def download(search_str, on_success, on_fail, path_str="/home/josh/.download-cache"):
+def download(search_str, on_success, on_fail, path_str="./.download-cache"):
     """
     :param search_str: The text to search
     :param on_success: A callable object that takes one argument: The path to the file
     :param on_fail: A callable object that takes no arguments.
     :param path_str: The directory that the file will be downloaded to
     """
-    def thread():
-        print("starting thread")
-        code = _download_video(search_str, path_str).wait(20)  # a maximum time of 20 seconds to download
-        print("downloaded")
-        if code == 0:
-            print("success")
-            on_success(_get_downloaded_path(search_str, path_str))
-        else:
-            print("fail")
-            on_fail()
-
-    # threading.Thread(target=thread).start()
-    thread()
+    code = _download_video(search_str, path_str).wait(20)  # a maximum time of 20 seconds to download
+    if code == 0:
+        on_success(_get_downloaded_path(search_str, path_str))
+    else:
+        on_fail()
