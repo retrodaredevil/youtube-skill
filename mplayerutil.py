@@ -1,8 +1,12 @@
 import subprocess
 
 
-def create_player(path_str):
-    return subprocess.Popen(["mplayer", path_str], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.PIPE)
+def create_player(path_str, show_video=True):
+    args = ["mplayer"]
+    if not show_video:
+        args.extend(["-vo", "null"])
+    args.append(path_str)
+    return subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.PIPE)
 
 
 def send(text, process):

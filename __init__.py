@@ -2,8 +2,11 @@ from adapt.intent import IntentBuilder
 from mycroft.skills.core import MycroftSkill, intent_handler
 from mycroft.util.log import LOG
 from mycroft.util import get_cache_directory
+from mycroft.util.parse import extract_number
 from .mplayerutil import *
 from .ytutil import download
+
+# from mycroft.util.lang import get_primary_lang_code
 
 
 class YoutubeSkill(MycroftSkill):
@@ -15,21 +18,24 @@ class YoutubeSkill(MycroftSkill):
         self.is_auto_paused = False
 
     def initialize(self):
-        self.add_event("recognizer_loop:record_begin", self.record_begin)
-        self.add_event("recognizer_loop:audio_output_end", self.record_end)
+        self.add_event("recognizer_loop:record_begin", self.auto_pause_begin)
+        self.add_event("recognizer_loop:utterance", self.auto_play_end)
+        self.add_event("recognizer_loop:audio_output_begin", self.auto_pause_begin)
+        self.add_event("recognizer_loop:audio_output_end", self.auto_play_end)
+
         self.add_event("mycroft.audio.service.play", self.play)
         self.add_event("mycroft.audio.service.resume", self.play)
         self.add_event("mycroft.audio.service.pause", lambda: self.pause())  # in lambda so unwanted args aren't passed
-        self.add_event("mycroft.audio.service.next", lambda: self.skip_10_seconds(2))
-        self.add_event("mycroft.audio.service.prev", lambda: self.skip_10_seconds(2, forward=False))
+        # self.add_event("mycroft.audio.service.next", lambda: self.skip_10_seconds(2))
+        # self.add_event("mycroft.audio.service.prev", lambda: self.skip_10_seconds(2, forward=False))
 
-    def record_begin(self):
+    def auto_pause_begin(self):
         print("record begin.")
         if self.is_playing:
             print("should auto pause in next method call because music is playing")
             self.pause(auto_paused=True)
 
-    def record_end(self):
+    def auto_play_end(self):
         print("record end")
         if self.is_auto_paused:
             print("it was auto paused so now we'll play")
@@ -103,6 +109,29 @@ class YoutubeSkill(MycroftSkill):
         path_str = get_cache_directory()
         print("using: " + str(path_str))
         download(search, success, fail, path_str=path_str)
+
+    def handle_skip(self, message, forward):
+        is_minute = bool(message.data.get("Minute"))
+        number = extract_number(message.data["utterance"], self.lang)
+        if is_minute:
+            number *= 60
+
+        if number <= 5:
+            self.speak_dialog("must.choose.multiple.of.ten")
+        else:
+            amount = int(round(number / 10.0))
+            if not self.skip_10_seconds(amount, forward=forward):
+                self.speak_dialog("no.song.playing")
+
+    @intent_handler(IntentBuilder("YoutubeSkipForwardIntent").require("SkipForward")
+                    .optionally("Second").optionally("Minute"))
+    def handle_skip_forward(self, message):
+        self.handle_skip(message, True)
+
+    @intent_handler(IntentBuilder("YoutubeSkipBackwardIntent").require("SkipBackward")
+                    .optionally("Second").optionally("Minute"))
+    def handle_skip_backward(self, message):
+        self.handle_skip(message, False)
 
     def stop(self):
         return self._replace_process(None)
