@@ -1,8 +1,7 @@
+import json
 import subprocess
-import threading
 from difflib import SequenceMatcher
 from pathlib import Path
-import youtube_dl
 
 
 def _download_video(search_str, path_str="."):
@@ -12,13 +11,14 @@ def _download_video(search_str, path_str="."):
         path.mkdir()
     if not path.is_dir():
         raise ValueError("path_str must not be a directory!")
-    return subprocess.Popen(["python3", "-m", "youtube_dl", "--default-search", "ytsearch", search_str],
-                            cwd=str(path.absolute()), stdout=subprocess.DEVNULL,
+    return subprocess.Popen(["python3", "-m", "youtube_dl", "--print-json", "--default-search", "ytsearch", search_str],
+                            cwd=str(path.absolute()), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                             stdin=subprocess.DEVNULL)
 
 
-def _get_downloaded_path(search_str, path_str="."):
+def __get_downloaded_path(search_str, path_str="."):
     """
+    DEPRECATED. Do not use unless necessary
     :param search_str: The search string
     :param path_str: The path that the file is in
     :return: A str representing the absolute file path to the desired file
@@ -44,8 +44,24 @@ def download(search_str, on_success, on_fail, path_str="./.download-cache"):
     :param on_fail: A callable object that takes no arguments.
     :param path_str: The directory that the file will be downloaded to
     """
-    code = _download_video(search_str, path_str).wait(20)  # a maximum time of 20 seconds to download
+    process = _download_video(search_str, path_str)
+    try:
+        code = process.wait(20)  # a maximum time of 20 seconds to download
+    except subprocess.TimeoutExpired:
+        on_fail()
+        return
+    # json_str = "".join(str(b) for b in process.stdout.readlines())
+    json_str = process.stdout.read()
+    info = json.loads(json_str)
     if code == 0:
-        on_success(_get_downloaded_path(search_str, path_str))
+        on_success(path_str + "/" + info["_filename"], info)
     else:
         on_fail()
+
+
+def get_artist(info_dict):
+    return info_dict.get("artist") or info_dict.get("creator") or info_dict.get("uploader")
+
+
+def get_track(info_dict):
+    return info_dict.get("track") or info_dict.get("alt_title") or info_dict.get("title")

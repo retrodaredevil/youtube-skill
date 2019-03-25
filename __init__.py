@@ -4,7 +4,8 @@ from mycroft.util.log import LOG
 from mycroft.util import get_cache_directory
 from mycroft.util.parse import extract_number
 from .mplayerutil import *
-from .ytutil import download
+from .ytutil import download, get_artist, get_track
+
 
 # from mycroft.util.lang import get_primary_lang_code
 
@@ -12,15 +13,18 @@ from .ytutil import download
 class YoutubeSkill(MycroftSkill):
 
     def __init__(self):
-        super(YoutubeSkill, self).__init__(name="YoutubeSkill")
+        super(YoutubeSkill, self).__init__(name="YoutubeAudioAndVideo")
         self.process = None
+        self.info_dict = None
         self.is_playing = False
+        """True if the current process is playing. If you want to know if something is playing, you should also make
+        sure self.process is active. It's recommended to use self._get_process()"""
         self.is_auto_paused = False
 
     def initialize(self):
         self.add_event("recognizer_loop:record_begin", self.auto_pause_begin)
         self.add_event("recognizer_loop:utterance", self.auto_play_end)
-        self.add_event("recognizer_loop:audio_output_begin", self.auto_pause_begin)
+        self.add_event("recognizer_loop:audio_output_start", self.auto_pause_begin)
         self.add_event("recognizer_loop:audio_output_end", self.auto_play_end)
 
         self.add_event("mycroft.audio.service.play", self.play)
@@ -32,27 +36,27 @@ class YoutubeSkill(MycroftSkill):
     def auto_pause_begin(self):
         print("record begin.")
         if self.is_playing:
-            print("should auto pause in next method call because music is playing")
+            # print("should auto pause in next method call because music is playing")
             self.pause(auto_paused=True)
 
     def auto_play_end(self):
         print("record end")
         if self.is_auto_paused:
-            print("it was auto paused so now we'll play")
+            # print("it was auto paused so now we'll play")
             self.play()
 
     def play(self):
         if not self.is_playing:
             self.toggle_pause()
         self.is_auto_paused = False
-        print("auto paused is now False after calling play()")
+        # print("auto paused is now False after calling play()")
 
     def pause(self, auto_paused=False):
         if self.is_playing:
             self.toggle_pause()
 
         self.is_auto_paused = auto_paused
-        print("auto paused is now " + str(auto_paused) + " after calling pause()")
+        # print("auto paused is now " + str(auto_paused) + " after calling pause()")
 
     def _get_process(self):
         process = self.process
@@ -60,7 +64,7 @@ class YoutubeSkill(MycroftSkill):
             return process
         return None
 
-    def _replace_process(self, process):
+    def _replace_process(self, process, info_dict=None):
         """
         :param process: The new Process to replace the old one or None
         :return: True if there was a previous process, False otherwise
@@ -72,6 +76,7 @@ class YoutubeSkill(MycroftSkill):
             r = True
 
         self.process = process
+        self.info_dict = info_dict
         if self._get_process():
             self.is_playing = True
         return r
@@ -94,8 +99,8 @@ class YoutubeSkill(MycroftSkill):
 
     @intent_handler(IntentBuilder("YoutubeIntent").require("Youtube"))
     def handle_youtube(self, message):
-        def success(path):
-            self._replace_process(create_player(path))
+        def success(path, info):
+            self._replace_process(create_player(path), info_dict=info)
             self.speak_dialog("playing")
 
         def fail():
@@ -132,6 +137,17 @@ class YoutubeSkill(MycroftSkill):
                     .optionally("Second").optionally("Minute"))
     def handle_skip_backward(self, message):
         self.handle_skip(message, False)
+
+    @intent_handler(IntentBuilder("YoutubeVideoInfo").require("Youtube").require("Info"))
+    def handle_video_info(self, message):
+        info = self.info_dict
+        if not info:
+            if self.is_playing and self._get_process():  # no info available
+                self.speak_dialog("no.info.available")
+            else:  # nothing playing
+                self.speak_dialog("no.song.playing")
+            return
+        self.speak_dialog("currently.playing", {"title": get_track(info), "artist": get_artist(info)})
 
     def stop(self):
         return self._replace_process(None)
