@@ -86,6 +86,10 @@ class YoutubeSkill(MycroftSkill):
         if process:
             toggle_pause(process)
             self.is_playing = not self.is_playing
+            # if self.is_playing:
+            #     send_play(process)
+            # else:
+            #     send_pause(process)
             return True
         return False
 
@@ -97,22 +101,26 @@ class YoutubeSkill(MycroftSkill):
             return True
         return False
 
-    @intent_handler(IntentBuilder("YoutubeIntent").require("Youtube"))
+    @intent_handler(IntentBuilder("YoutubeIntent").require("Youtube").optionally("WithoutVideo"))
     def handle_youtube(self, message):
         def success(path, info):
-            self._replace_process(create_player(path), info_dict=info)
+            self._replace_process(create_player(path, show_video=not is_without_video), info_dict=info)
             self.speak_dialog("playing")
 
         def fail():
             self.speak_dialog("failed")
             self._replace_process(None)
 
+        without_video = message.data.get("WithoutVideo")
+        is_without_video = bool(without_video)
+
         word = message.data.get("Youtube")
         search = message.data["utterance"].replace(word, "")
+        if is_without_video:
+            search = search.replace(without_video, "")
         LOG.info("using: " + search)
         self.speak_dialog("downloading")
         path_str = get_cache_directory()
-        print("using: " + str(path_str))
         download(search, success, fail, path_str=path_str)
 
     def handle_skip(self, message, forward):
@@ -148,6 +156,14 @@ class YoutubeSkill(MycroftSkill):
                 self.speak_dialog("no.song.playing")
             return
         self.speak_dialog("currently.playing", {"title": get_track(info), "artist": get_artist(info)})
+
+    @intent_handler(IntentBuilder("YoutubeFullscreen").require("Youtube").require("ToggleFullscreen"))
+    def handle_toggle_fullscreen(self, message):
+        process = self._get_process()
+        if process:
+            toggle_fullscreen(process)
+        else:
+            self.speak_dialog("no.song.playing")
 
     def stop(self):
         return self._replace_process(None)
