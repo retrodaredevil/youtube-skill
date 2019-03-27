@@ -1,6 +1,7 @@
 import json
 import subprocess
 from difflib import SequenceMatcher
+from os.path import join
 from pathlib import Path
 
 
@@ -54,7 +55,8 @@ def download(search_str, on_success, on_fail, path_str="./.download-cache"):
     json_str = process.stdout.read()
     info = json.loads(json_str)
     if code == 0:
-        on_success(path_str + "/" + info["_filename"], info)
+        # on_success(path_str + "/" + info["_filename"], info)
+        on_success(join(path_str, info["_filename"]), info)
     else:
         on_fail()
 
