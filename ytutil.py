@@ -51,11 +51,13 @@ def download(search_str, on_success, on_fail, path_str="./.download-cache"):
     except subprocess.TimeoutExpired:
         on_fail()
         return
-    # json_str = "".join(str(b) for b in process.stdout.readlines())
     json_str = process.stdout.read()
-    info = json.loads(json_str)
+    try:
+        info = json.loads(json_str)
+    except json.decoder.JSONDecodeError:
+        on_fail()
+        return
     if code == 0:
-        # on_success(path_str + "/" + info["_filename"], info)
         on_success(join(path_str, info["_filename"]), info)
     else:
         on_fail()

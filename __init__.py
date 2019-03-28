@@ -1,10 +1,9 @@
-import threading
+import datetime
 from os.path import join
 
 from adapt.intent import IntentBuilder
 from mycroft.skills.core import MycroftSkill, intent_handler
 from mycroft.util.log import LOG
-from mycroft.util import get_cache_directory
 from mycroft.util.parse import extract_number
 from .mplayerutil import *
 from .ytutil import download, get_artist, get_track
@@ -50,6 +49,8 @@ class YoutubeSkill(MycroftSkill):
         self.add_event("mycroft.audio.service.next", lambda: self.next(say_no_videos=True))
         self.add_event("mycroft.audio.service.prev", lambda: self.previous())
 
+        self.schedule_repeating_event(self.periodic_execute, datetime.datetime.now(), 1)
+
     def auto_pause_begin(self):
         if self.is_playing:
             # print("should auto pause in next method call because music is playing")
@@ -82,9 +83,6 @@ class YoutubeSkill(MycroftSkill):
         :param process: The new Process to replace the old one or None
         :return: True if there was a previous process, False otherwise
         """
-        def wait_thread():
-            process.wait()
-            self.on_video_end()
 
         r = False
         if self.process:
@@ -97,7 +95,6 @@ class YoutubeSkill(MycroftSkill):
         if process:
             self.is_playing = True
             self.is_stopped = False
-            threading.Thread(target=wait_thread, daemon=True).start()
 
         return r
 
@@ -123,12 +120,6 @@ class YoutubeSkill(MycroftSkill):
                               video_info=video_info)
         self.speak_dialog("playing")
 
-    def schedule_next(self, video_info):
-        if not self._get_process():
-            self.play_video(video_info)
-            return
-        self.next_videos.append(video_info)
-
     def next(self, say_no_videos=True):
         if self.next_videos:
             video_info = self.current_video_info
@@ -150,9 +141,8 @@ class YoutubeSkill(MycroftSkill):
         else:
             self.speak_dialog("no.past.videos")
 
-    def on_video_end(self):
-        self.is_playing = False
-        if not self.is_stopped:
+    def periodic_execute(self):
+        if not self.is_stopped and not self._get_process():
             self.next(say_no_videos=False)
 
     @intent_handler(IntentBuilder("YoutubeIntent").require("Youtube").optionally("WithoutVideo")
@@ -161,12 +151,17 @@ class YoutubeSkill(MycroftSkill):
         def success(path, info):
             video_info = VideoInfo(path, info, not is_without_video, is_fullscreen)
             if is_next:
-                self.schedule_next(video_info)
+                self.next_videos.append(video_info)
+                self.speak_dialog("downloaded")
             else:
+                current_video = self.current_video_info
+                if current_video:
+                    self.past_videos.append(current_video)
                 self.play_video(video_info)
 
         def fail():
             self.speak_dialog("failed")
+            self.enclosure.mouth_text("Failed to Download")
             self._replace_process(None)
 
         without_video = message.data.get("WithoutVideo")
@@ -188,7 +183,8 @@ class YoutubeSkill(MycroftSkill):
             search = search.replace(next_word, "")
         LOG.info("using: " + search)
         self.speak_dialog("downloading")
-        path_str = join(self._dir, "download-cache")
+        self.enclosure.mouth_text("Downloading...")
+        path_str = join(self.file_system.path, ".download-cache")
         download(search, success, fail, path_str=path_str)
 
     def handle_skip(self, message, forward):
@@ -216,13 +212,14 @@ class YoutubeSkill(MycroftSkill):
 
     @intent_handler(IntentBuilder("YoutubeVideoInfo").require("Youtube").require("Info"))
     def handle_video_info(self, message):
-        info = self.current_video_info.info
-        if not info:
+        current_video = self.current_video_info
+        if not current_video:
             if self.is_playing and self._get_process():  # no info available
                 self.speak_dialog("no.info.available")
             else:  # nothing playing
                 self.speak_dialog("no.song.playing")
             return
+        info = current_video.info
         self.speak_dialog("currently.playing", {"title": get_track(info), "artist": get_artist(info)})
 
     @intent_handler(IntentBuilder("YoutubeFullscreen").require("Youtube").require("ToggleFullscreen"))
