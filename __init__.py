@@ -1,8 +1,10 @@
 import datetime
+import re
 from os.path import join
 
 from adapt.intent import IntentBuilder
 from mycroft.skills.core import MycroftSkill, intent_handler
+from mycroft.skills.common_play_skill import CommonPlaySkill, CPSMatchLevel
 from mycroft.util.log import LOG
 from mycroft.util.parse import extract_number
 from .mplayerutil import *
@@ -10,6 +12,10 @@ from .ytutil import download, get_artist, get_track
 
 
 # TODO Use this to make better: https://github.com/penrods/AVmusic/blob/18.08/__init__.py?ts=4
+
+def split_word(to_split):
+    """Simple util method that is used throughout this file to easily split a string if needed."""
+    return re.split("\W+", to_split)
 
 
 class VideoInfo:
@@ -20,7 +26,7 @@ class VideoInfo:
         self.start_fullscreen = start_fullscreen
 
 
-class YoutubeSkill(MycroftSkill):
+class YoutubeSkill(CommonPlaySkill):
 
     def __init__(self):
         super(YoutubeSkill, self).__init__(name="YoutubeAudioAndVideo")
@@ -35,11 +41,12 @@ class YoutubeSkill(MycroftSkill):
         sure self.process is active. It's recommended to use self._get_process()"""
         self.is_auto_paused = False
         self.is_stopped = False
+        """A bool that when True, stops automatic playing of the next song"""
 
     def initialize(self):
         # useful: https://mycroft.ai/documentation/message-bus/
         self.add_event("recognizer_loop:record_begin", self.auto_pause_begin)
-        self.add_event("recognizer_loop:utterance", self.auto_play_end)
+        self.add_event("recognizer_loop:record_end", self.auto_play_end)
         self.add_event("recognizer_loop:audio_output_start", self.auto_pause_begin)
         self.add_event("recognizer_loop:audio_output_end", self.auto_play_end)
 
@@ -50,6 +57,20 @@ class YoutubeSkill(MycroftSkill):
         self.add_event("mycroft.audio.service.prev", lambda: self.previous())
 
         self.schedule_repeating_event(self.periodic_execute, datetime.datetime.now(), 1)
+
+    def _voc_match(self, utt, voc_filename, lang=None):
+        lang = lang or self.lang
+        cache_key = lang + voc_filename
+        self.voc_match(utt, voc_filename, lang)
+        if utt:
+            # Check for matches against complete words
+            # for i in self.voc_match_cache[cache_key]:
+            #     if re.match(r'.*\b' + i + r'\b.*', utt):
+            #         return i
+            return next((i for i in self.voc_match_cache[cache_key]
+                         if re.match(r'.*\b' + i + r'\b.*', utt)), None)
+        else:
+            return None
 
     def auto_pause_begin(self):
         if self.is_playing:
@@ -145,12 +166,11 @@ class YoutubeSkill(MycroftSkill):
         if not self.is_stopped and not self._get_process():
             self.next(say_no_videos=False)
 
-    @intent_handler(IntentBuilder("YoutubeIntent").require("Youtube").optionally("WithoutVideo")
-                    .optionally("StartFullscreen").optionally("Next"))
-    def handle_youtube(self, message):
+    def do_video_search_and_play(self, search, schedule_next, show_video, start_fullscreen):
         def success(path, info):
-            video_info = VideoInfo(path, info, not is_without_video, is_fullscreen)
-            if is_next:
+            video_info = VideoInfo(path, info, show_video, start_fullscreen)
+            self.is_stopped = False
+            if schedule_next:
                 self.next_videos.append(video_info)
                 self.speak_dialog("downloaded")
             else:
@@ -163,6 +183,49 @@ class YoutubeSkill(MycroftSkill):
             self.speak_dialog("failed")
             self.enclosure.mouth_text("Failed to Download")
             self._replace_process(None)
+        LOG.info("using: " + search)
+        self.speak_dialog("downloading")
+        self.enclosure.mouth_text("Downloading...")
+        path_str = join(self.file_system.path, ".download-cache")
+        download(search, success, fail, path_str=path_str)
+
+    def CPS_match_query_phrase(self, phrase):
+        phrase = phrase.lower()
+
+        next_word = self._voc_match(phrase, "Next")
+        is_next = bool(next_word)
+
+        without_video = self._voc_match(phrase, "WithoutVideo")
+        is_without_video = bool(without_video)
+
+        start_fullscreen = self._voc_match(phrase, "StartFullscreen")
+        is_fullscreen = bool(start_fullscreen)
+
+        # print("here: {}, {}, {}".format(next_word, without_video, start_fullscreen))
+        if is_next:
+            phrase = phrase.replace(next_word, "")
+        if is_without_video:
+            phrase = phrase.replace(without_video, "")
+            is_fullscreen = False
+        if is_fullscreen:
+            phrase = phrase.replace(start_fullscreen, "")
+
+        # search, schedule next, show video, start full screen
+        data = (phrase, is_next, not is_without_video, is_fullscreen)
+        if self.voc_match(phrase, "Youtube"):
+            return (phrase, CPSMatchLevel.MULTI_KEY, data)
+        else:
+            return (phrase, CPSMatchLevel.GENERIC, data)
+
+    def CPS_start(self, phrase, data):
+        self.do_video_search_and_play(data[0], *(data[1:]))
+
+    @intent_handler(IntentBuilder("YoutubeIntent").require("Youtube").optionally("WithoutVideo")
+                    .optionally("StartFullscreen").optionally("Next"))
+    def handle_youtube(self, message):
+
+        next_word = message.data.get("Next")
+        is_next = bool(next_word)
 
         without_video = message.data.get("WithoutVideo")
         is_without_video = bool(without_video)
@@ -170,22 +233,17 @@ class YoutubeSkill(MycroftSkill):
         start_fullscreen = message.data.get("StartFullscreen")
         is_fullscreen = bool(start_fullscreen)
 
-        next_word = message.data.get("Next")
-        is_next = bool(next_word)
-
         word = message.data.get("Youtube")
         search = message.data["utterance"].replace(word, "")
-        if is_without_video:
-            search = search.replace(without_video, "")
-        if is_fullscreen:
-            search = search.replace(start_fullscreen, "")
         if is_next:
             search = search.replace(next_word, "")
-        LOG.info("using: " + search)
-        self.speak_dialog("downloading")
-        self.enclosure.mouth_text("Downloading...")
-        path_str = join(self.file_system.path, ".download-cache")
-        download(search, success, fail, path_str=path_str)
+        if is_without_video:
+            search = search.replace(without_video, "")
+            is_fullscreen = False
+        if is_fullscreen:
+            search = search.replace(start_fullscreen, "")
+
+        self.do_video_search_and_play(search, is_next, not without_video, is_fullscreen)
 
     def handle_skip(self, message, forward):
         is_minute = bool(message.data.get("Minute"))
@@ -231,6 +289,7 @@ class YoutubeSkill(MycroftSkill):
             self.speak_dialog("no.song.playing")
 
     def stop(self):
+        print("youtube skill received stop.")
         self.is_stopped = True
         return self._replace_process(None)
 
