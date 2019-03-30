@@ -42,21 +42,10 @@ class YoutubeSkill(CommonPlaySkill):
         self.is_auto_paused = False
         self.is_stopped = False
         """A bool that when True, stops automatic playing of the next song"""
+        self.is_monitoring = False
 
-    def initialize(self):
-        # useful: https://mycroft.ai/documentation/message-bus/
-        self.add_event("recognizer_loop:record_begin", self.auto_pause_begin)
-        self.add_event("recognizer_loop:record_end", self.auto_play_end)
-        self.add_event("recognizer_loop:audio_output_start", self.auto_pause_begin)
-        self.add_event("recognizer_loop:audio_output_end", self.auto_play_end)
-
-        self.add_event("mycroft.audio.service.play", self.play)
-        self.add_event("mycroft.audio.service.resume", self.play)
-        self.add_event("mycroft.audio.service.pause", lambda: self.pause())  # in lambda so unwanted args aren't passed
-        self.add_event("mycroft.audio.service.next", lambda: self.next(say_no_videos=True))
-        self.add_event("mycroft.audio.service.prev", lambda: self.previous())
-
-        self.schedule_repeating_event(self.periodic_execute, datetime.datetime.now(), 1)
+        self.ignore_stop = False
+        self.was_play_success = False
 
     def _voc_match(self, utt, voc_filename, lang=None):
         lang = lang or self.lang
@@ -71,6 +60,36 @@ class YoutubeSkill(CommonPlaySkill):
                          if re.match(r'.*\b' + i + r'\b.*', utt)), None)
         else:
             return None
+
+    def start_monitor(self):
+        if self.is_monitoring:
+            return
+        self.is_monitoring = True
+        # useful: https://mycroft.ai/documentation/message-bus/
+        self.add_event("recognizer_loop:record_begin", self.auto_pause_begin)
+        self.add_event("recognizer_loop:record_end", self.auto_play_end)
+        self.add_event("recognizer_loop:audio_output_start", self.auto_pause_begin)
+        self.add_event("recognizer_loop:audio_output_end", self.auto_play_end)
+
+        self.add_event("mycroft.audio.service.play", self.play)
+        self.add_event("mycroft.audio.service.resume", self.play)
+        self.add_event("mycroft.audio.service.pause", lambda: self.pause())  # in lambda so unwanted args aren't passed
+        self.add_event("mycroft.audio.service.next", lambda: self.next(say_no_videos=True))
+        self.add_event("mycroft.audio.service.prev", lambda: self.previous())
+
+        self.schedule_repeating_event(self.periodic_execute, datetime.datetime.now(), 1, name="repeating_event")
+
+    def stop_monitor(self):
+        if not self.is_monitoring:
+            return
+        self.is_monitoring = False
+        for event in ["recognizer_loop:record_begin", "recognizer_loop:record_end",
+                      "recognizer_loop:audio_output_start", "recognizer_loop:audio_output_end",
+                      "mycroft.audio.service.play", "mycroft.audio.service.resume", "mycroft.audio.service.pause",
+                      "mycroft.audio.service.next", "mycroft.audio.service.prev"]:
+            self.cancel_scheduled_event(event)
+
+        self.cancel_scheduled_event("repeating_event")
 
     def auto_pause_begin(self):
         if self.is_playing:
@@ -114,6 +133,7 @@ class YoutubeSkill(CommonPlaySkill):
         self.process = process
         self.current_video_info = video_info
         if process:
+            self.start_monitor()
             self.is_playing = True
             self.is_stopped = False
 
@@ -210,14 +230,20 @@ class YoutubeSkill(CommonPlaySkill):
         if is_fullscreen:
             phrase = phrase.replace(start_fullscreen, "")
 
+        self.ignore_stop = True
+        self.was_play_success = False
         # search, schedule next, show video, start full screen
         data = (phrase, is_next, not is_without_video, is_fullscreen)
         if self.voc_match(phrase, "Youtube"):
-            return (phrase, CPSMatchLevel.MULTI_KEY, data)
+            return phrase, CPSMatchLevel.MULTI_KEY, data
         else:
-            return (phrase, CPSMatchLevel.GENERIC, data)
+            return phrase, CPSMatchLevel.GENERIC, data
 
     def CPS_start(self, phrase, data):
+        LOG.info("got start")
+        self.was_play_success = True
+        self.is_stopped = False
+        self.start_monitor()
         self.do_video_search_and_play(data[0], *(data[1:]))
 
     @intent_handler(IntentBuilder("YoutubeIntent").require("Youtube").optionally("WithoutVideo")
@@ -289,8 +315,19 @@ class YoutubeSkill(CommonPlaySkill):
             self.speak_dialog("no.song.playing")
 
     def stop(self):
-        print("youtube skill received stop.")
+        if self.ignore_stop:
+            self.ignore_stop = False
+            if not self.was_play_success:
+                LOG.info("scheduling event")
+                self.schedule_event(lambda: self.stop() if not self.was_play_success else None,
+                                    datetime.datetime.now() + datetime.timedelta(seconds=1))
+            else:
+                LOG.info("Not scheduling")
+            return False
+        self.was_play_success = False
+        LOG.info("youtube skill received stop")
         self.is_stopped = True
+        self.stop_monitor()
         return self._replace_process(None)
 
 
