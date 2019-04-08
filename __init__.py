@@ -1,4 +1,5 @@
 import datetime
+import os
 import re
 from os.path import join
 
@@ -11,13 +12,6 @@ from .mplayerutil import *
 from .ytutil import download, get_artist, get_track
 
 
-# TODO Use this to make better: https://github.com/penrods/AVmusic/blob/18.08/__init__.py?ts=4
-
-def split_word(to_split):
-    """Simple util method that is used throughout this file to easily split a string if needed."""
-    return re.split("\W+", to_split)
-
-
 class VideoInfo:
     def __init__(self, path, info, show_video, start_fullscreen):
         self.path = path
@@ -26,7 +20,7 @@ class VideoInfo:
         self.start_fullscreen = start_fullscreen
 
 
-class YoutubeSkill(CommonPlaySkill):
+class YoutubeSkill(CommonPlaySkill):  # info: https://mycroft.ai/documentation/skills/common-play-framework/
 
     def __init__(self):
         super(YoutubeSkill, self).__init__(name="YoutubeAudioAndVideo")
@@ -93,12 +87,10 @@ class YoutubeSkill(CommonPlaySkill):
 
     def auto_pause_begin(self):
         if self.is_playing:
-            # print("should auto pause in next method call because music is playing")
             self.pause(auto_paused=True)
 
     def auto_play_end(self):
         if self.is_auto_paused:
-            # print("it was auto paused so now we'll play")
             self.play()
 
     def play(self):
@@ -216,12 +208,11 @@ class YoutubeSkill(CommonPlaySkill):
         is_next = bool(next_word)
 
         without_video = self._voc_match(phrase, "WithoutVideo")
-        is_without_video = bool(without_video)
+        is_without_video = bool(without_video) or not bool(os.environ.get("DESKTOP_SESSION"))
 
         start_fullscreen = self._voc_match(phrase, "StartFullscreen")
-        is_fullscreen = bool(start_fullscreen)
+        is_fullscreen = bool(start_fullscreen) and not without_video
 
-        # print("here: {}, {}, {}".format(next_word, without_video, start_fullscreen))
         if is_next:
             phrase = phrase.replace(next_word, "")
         if is_without_video:
@@ -240,7 +231,6 @@ class YoutubeSkill(CommonPlaySkill):
             return phrase, CPSMatchLevel.GENERIC, data
 
     def CPS_start(self, phrase, data):
-        LOG.info("got start")
         self.was_play_success = True
         self.is_stopped = False
         self.start_monitor()
@@ -254,10 +244,10 @@ class YoutubeSkill(CommonPlaySkill):
         is_next = bool(next_word)
 
         without_video = message.data.get("WithoutVideo")
-        is_without_video = bool(without_video)
+        is_without_video = bool(without_video) or not bool(os.environ.get("DESKTOP_SESSION"))
 
         start_fullscreen = message.data.get("StartFullscreen")
-        is_fullscreen = bool(start_fullscreen)
+        is_fullscreen = bool(start_fullscreen) and not without_video
 
         word = message.data.get("Youtube")
         search = message.data["utterance"].replace(word, "")
@@ -314,8 +304,11 @@ class YoutubeSkill(CommonPlaySkill):
         else:
             self.speak_dialog("no.song.playing")
 
-    def stop(self):
-        if self.ignore_stop:
+    def stop(self, force_stop=False):
+        if not isinstance(force_stop, bool):
+            raise ValueError("force_stop is: {}".format(force_stop))
+
+        if self.ignore_stop and not force_stop:
             self.ignore_stop = False
             if not self.was_play_success:
                 LOG.info("scheduling event")
@@ -329,6 +322,10 @@ class YoutubeSkill(CommonPlaySkill):
         self.is_stopped = True
         self.stop_monitor()
         return self._replace_process(None)
+
+    def shutdown(self):
+        super(YoutubeSkill, self).shutdown()
+        self.stop(force_stop=True)
 
 
 def create_skill():

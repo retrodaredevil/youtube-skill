@@ -1,6 +1,5 @@
 import json
 import subprocess
-from difflib import SequenceMatcher
 from os.path import join
 from pathlib import Path
 
@@ -15,27 +14,6 @@ def _download_video(search_str, path_str="."):
     return subprocess.Popen(["python3", "-m", "youtube_dl", "--print-json", "--default-search", "ytsearch", search_str],
                             cwd=str(path.absolute()), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                             stdin=subprocess.DEVNULL)
-
-
-def __get_downloaded_path(search_str, path_str="."):
-    """
-    DEPRECATED. Do not use unless necessary
-    :param search_str: The search string
-    :param path_str: The path that the file is in
-    :return: A str representing the absolute file path to the desired file
-    """
-    path = Path(path_str)
-    if not path.is_dir():
-        raise ValueError("path is not a directory!")
-    best_ratio = 0
-    best_file = None
-    for file in path.iterdir():
-        ratio = SequenceMatcher(None, file.name.lower(), search_str.lower()).ratio()
-        if ratio > best_ratio:
-            best_ratio = ratio
-            best_file = str(file.absolute())
-
-    return best_file
 
 
 def download(search_str, on_success, on_fail, path_str="./.download-cache"):
