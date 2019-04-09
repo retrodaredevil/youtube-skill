@@ -1,0 +1,19 @@
+{
+  "name": "Youtube Audio and Video",
+  "color": "#FF0000",
+  "skillMetadata": {
+    "sections": [
+      {
+        "name": "Configuration",
+        "fields": [
+          {
+            "type": "checkbox",
+            "name": "show_video_by_default",
+            "value": true,
+            "label": "Show Video by Default"
+          }
+        ]
+      }
+    ]
+  }
+}

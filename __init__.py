@@ -41,17 +41,21 @@ class YoutubeSkill(CommonPlaySkill):  # info: https://mycroft.ai/documentation/s
         self.ignore_stop = False
         self.was_play_success = False
 
-    def _voc_match(self, utt, voc_filename, lang=None):
+        # initialize settings values
+        self.settings["show_video_by_default"] = True
+
+    def _voc_match(self, utt_or_message, voc_filename, lang=None):
+        if not isinstance(utt_or_message, str):
+            return utt_or_message.data.get(voc_filename)
+        utt_or_message = utt_or_message.lower()
+
         lang = lang or self.lang
         cache_key = lang + voc_filename
-        self.voc_match(utt, voc_filename, lang)
-        if utt:
+        self.voc_match(utt_or_message, voc_filename, lang)
+        if utt_or_message:
             # Check for matches against complete words
-            # for i in self.voc_match_cache[cache_key]:
-            #     if re.match(r'.*\b' + i + r'\b.*', utt):
-            #         return i
             return next((i for i in self.voc_match_cache[cache_key]
-                         if re.match(r'.*\b' + i + r'\b.*', utt)), None)
+                         if re.match(r'.*\b' + i + r'\b.*', utt_or_message)), None)
         else:
             return None
 
@@ -201,30 +205,53 @@ class YoutubeSkill(CommonPlaySkill):  # info: https://mycroft.ai/documentation/s
         path_str = join(self.file_system.path, ".download-cache")
         download(search, success, fail, path_str=path_str)
 
-    def CPS_match_query_phrase(self, phrase):
-        phrase = phrase.lower()
+    def get_query_data(self, utt_or_message):
+        video_supported = bool(os.environ.get("DESKTOP_SESSION"))
 
-        next_word = self._voc_match(phrase, "Next")
+        youtube_word = self._voc_match(utt_or_message, "Youtube")
+
+        next_word = self._voc_match(utt_or_message, "Next")
         is_next = bool(next_word)
 
-        without_video = self._voc_match(phrase, "WithoutVideo")
-        is_without_video = bool(without_video) or not bool(os.environ.get("DESKTOP_SESSION"))
+        without_video = self._voc_match(utt_or_message, "WithoutVideo")
+        is_without_video = bool(without_video)
 
-        start_fullscreen = self._voc_match(phrase, "StartFullscreen")
+        with_video = self._voc_match(utt_or_message, "WithVideo")
+        is_with_video = bool(with_video)
+
+        start_fullscreen = self._voc_match(utt_or_message, "StartFullscreen")
         is_fullscreen = bool(start_fullscreen) and not without_video
 
+        search = utt_or_message if isinstance(utt_or_message, str) else utt_or_message.data["utterance"]
+        if youtube_word:
+            search = search.replace(youtube_word, "")
         if is_next:
-            phrase = phrase.replace(next_word, "")
+            search = search.replace(next_word, "")
         if is_without_video:
-            phrase = phrase.replace(without_video, "")
+            search = search.replace(without_video, "")
             is_fullscreen = False
+        elif is_with_video:
+            search = search.replace(with_video, "")
         if is_fullscreen:
-            phrase = phrase.replace(start_fullscreen, "")
+            search = search.replace(start_fullscreen, "")
 
-        self.ignore_stop = True
-        self.was_play_success = False
         # search, schedule next, show video, start full screen
-        data = (phrase, is_next, not is_without_video, is_fullscreen)
+        return (search, is_next, ((not is_without_video and self.settings.get("show_video_by_default"))
+                                  or with_video) and video_supported,
+                is_fullscreen and video_supported)
+
+    def on_start(self, data):
+        """
+        :param data: The data from get_query_data()
+        """
+        self.is_stopped = False
+        self.start_monitor()
+        self.do_video_search_and_play(data[0], *data[1:])
+
+    def CPS_match_query_phrase(self, phrase):
+        self.ignore_stop = True  # self.stop() will be called because of a stop broadcast from CommonPlaySkill
+        self.was_play_success = False
+        data = self.get_query_data(phrase)
         if self.voc_match(phrase, "Youtube"):
             return phrase, CPSMatchLevel.MULTI_KEY, data
         else:
@@ -232,34 +259,13 @@ class YoutubeSkill(CommonPlaySkill):  # info: https://mycroft.ai/documentation/s
 
     def CPS_start(self, phrase, data):
         self.was_play_success = True
-        self.is_stopped = False
-        self.start_monitor()
-        self.do_video_search_and_play(data[0], *(data[1:]))
+        self.on_start(data)
 
-    @intent_handler(IntentBuilder("YoutubeIntent").require("Youtube").optionally("WithoutVideo")
+    @intent_handler(IntentBuilder("YoutubeIntent").require("Youtube").optionally("WithoutVideo").optionally("WithVideo")
                     .optionally("StartFullscreen").optionally("Next"))
     def handle_youtube(self, message):
-
-        next_word = message.data.get("Next")
-        is_next = bool(next_word)
-
-        without_video = message.data.get("WithoutVideo")
-        is_without_video = bool(without_video) or not bool(os.environ.get("DESKTOP_SESSION"))
-
-        start_fullscreen = message.data.get("StartFullscreen")
-        is_fullscreen = bool(start_fullscreen) and not without_video
-
-        word = message.data.get("Youtube")
-        search = message.data["utterance"].replace(word, "")
-        if is_next:
-            search = search.replace(next_word, "")
-        if is_without_video:
-            search = search.replace(without_video, "")
-            is_fullscreen = False
-        if is_fullscreen:
-            search = search.replace(start_fullscreen, "")
-
-        self.do_video_search_and_play(search, is_next, not without_video, is_fullscreen)
+        data = self.get_query_data(message)
+        self.on_start(data)
 
     def handle_skip(self, message, forward):
         is_minute = bool(message.data.get("Minute"))
